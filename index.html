@@ -4,288 +4,210 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>iPhone Handwriting Scanner</title>
+  <title>Digit Reader</title>
   <style>
     body {
       font-family: Arial, sans-serif;
       max-width: 520px;
       margin: 30px auto;
-      padding: 18px;
-      background: #f4f6f8;
-      color: #172033;
+      padding: 20px;
+      text-align: center;
+      background: #f5f7fa;
+      color: #202124;
     }
     .panel {
       background: white;
       padding: 22px;
-      border-radius: 18px;
-      box-shadow: 0 3px 14px #0001;
+      border-radius: 16px;
+      box-shadow: 0 2px 12px #00000012;
     }
     button, input {
-      width: 100%;
-      box-sizing: border-box;
-      margin: 10px 0;
-      padding: 13px;
+      margin: 12px 0;
       font-size: 16px;
     }
     button {
+      padding: 12px 20px;
       border: 0;
-      border-radius: 10px;
-      background: #155eef;
+      border-radius: 8px;
+      background: #1769e0;
       color: white;
-      font-weight: bold;
+      cursor: pointer;
     }
-    canvas, #preview {
+    img {
       display: block;
       max-width: 100%;
-      margin: 12px auto;
-      border: 1px solid #ddd;
+      max-height: 280px;
+      margin: 16px auto;
+      border-radius: 8px;
     }
-    #preview { max-height: 280px; }
-    #result { font-size: 22px; font-weight: bold; }
-    #status { overflow-wrap: anywhere; }
+    #result {
+      font-size: 24px;
+      font-weight: bold;
+      margin: 18px 0;
+    }
+    #status {
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
   </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@3.20.0/dist/tf-core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu@3.20.0/dist/tf-backend-cpu.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/tf-tflite.min.js"></script>
 </head>
+
 <body>
   <div class="panel">
-    <h1>Digit Scanner</h1>
-    <p>Photograph one large handwritten digit on plain white paper.</p>
+    <h1>Digit Reader</h1>
+    <p>Take a photo or select an image containing one handwritten digit.</p>
 
-    <input id="photo" type="file" accept="image/*" capture="environment">
+    <input
+      id="photo"
+      type="file"
+      accept="image/*"
+      capture="environment"
+    >
 
-    <img id="preview" hidden alt="Photo preview">
+    <img id="preview" alt="Selected digit" hidden>
 
-    <button id="scan" disabled>Recognise digit</button>
+    <button id="readButton" disabled>Recognise digit</button>
 
-    <p id="status">Loading machine-learning model...</p>
-    <p id="result"></p>
-    <p id="confidence"></p>
-
-    <h3>Processed image (28 × 28)</h3>
-    <canvas id="small" width="280" height="280"></canvas>
+    <div id="result">Digit: —</div>
+    <p id="status">Loading machine-learning model…</p>
   </div>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu@4.22.0/dist/tf-backend-cpu.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/tf-tflite.min.js"></script>
-  
-  
+
   <script>
     const MODEL_URL =
       "https://raw.githubusercontent.com/mananmaharaja98-del/digit-read-ml/main/mnist_model.tflite";
 
+    let model = null;
+
     const photo = document.getElementById("photo");
     const preview = document.getElementById("preview");
-    const scan = document.getElementById("scan");
+    const readButton = document.getElementById("readButton");
     const status = document.getElementById("status");
     const result = document.getElementById("result");
-    const confidence = document.getElementById("confidence");
-    const canvas = document.getElementById("small");
-    const ctx = canvas.getContext("2d");
-
-    let model = null;
-    let imageReady = false;
 
     async function initialise() {
       try {
-        if (!window.tflite || !window.tf) {
-          throw new Error("The machine-learning libraries did not load.");
-        }
+        status.textContent = "Initialising TensorFlow…";
+
+        await tf.setBackend("cpu");
+        await tf.ready();
+
+        status.textContent = "Loading digit model…";
 
         tflite.setWasmPath(
-          "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.8/dist/"
+          "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/"
         );
 
-        await tf.ready();
         model = await tflite.loadTFLiteModel(MODEL_URL);
 
-        status.textContent = "Model loaded. Take a photo of one digit.";
+        status.textContent = "Model loaded. Select a digit photo.";
+        readButton.disabled = !preview.src;
       } catch (error) {
-        status.textContent = "Model loading failed: " + error.message;
+        console.error("Model initialisation failed:", error);
+        status.textContent =
+          "Model failed to load: " + (error.message || String(error));
       }
     }
 
     photo.addEventListener("change", () => {
-      const file = photo.files[0];
+      const file = photo.files && photo.files[0];
       if (!file) return;
 
-      imageReady = false;
-      result.textContent = "";
-      confidence.textContent = "";
+      preview.src = URL.createObjectURL(file);
+      preview.hidden = false;
 
-      const url = URL.createObjectURL(file);
       preview.onload = () => {
-        imageReady = true;
-        preview.hidden = false;
-        scan.disabled = !model;
+        readButton.disabled = !model;
         status.textContent = model
           ? "Photo ready. Tap Recognise digit."
-          : "Photo ready. Waiting for model...";
-        URL.revokeObjectURL(url);
+          : "Photo ready; waiting for model.";
       };
-      preview.onerror = () => {
-        status.textContent = "Could not open that image.";
-        URL.revokeObjectURL(url);
-      };
-      preview.src = url;
     });
 
-    function prepareImage(img) {
-      // Find the approximate bounds of the dark handwritten digit.
-      const work = document.createElement("canvas");
-      const maxSide = 600;
-      const scale = Math.min(
-        1, maxSide / Math.max(img.naturalWidth, img.naturalHeight)
-      );
+    readButton.addEventListener("click", async () => {
+      if (!model || !preview.complete || !preview.naturalWidth) return;
 
-      work.width = Math.max(1, Math.round(img.naturalWidth * scale));
-      work.height = Math.max(1, Math.round(img.naturalHeight * scale));
-
-      const wctx = work.getContext("2d", {
-        willReadFrequently: true
-      });
-
-      wctx.fillStyle = "white";
-      wctx.fillRect(0, 0, work.width, work.height);
-      wctx.drawImage(img, 0, 0, work.width, work.height);
-
-      const pixels = wctx.getImageData(
-        0, 0, work.width, work.height
-      );
-      const { data, width, height } = pixels;
-
-      let minX = width, minY = height, maxX = -1, maxY = -1;
-
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const i = (y * width + x) * 4;
-          const gray = (
-            data[i] * 0.299 +
-            data[i + 1] * 0.587 +
-            data[i + 2] * 0.114
-          );
-
-          // Ignore very light background pixels.
-          if (gray < 160) {
-            minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
-            maxX = Math.max(maxX, x);
-            maxY = Math.max(maxY, y);
-          }
-        }
-      }
-
-      if (maxX < 0) {
-        throw new Error("No dark digit found. Use dark ink on white paper.");
-      }
-
-      // Crop around the digit, preserving a little surrounding space.
-      const pad = Math.round(
-        Math.max(maxX - minX + 1, maxY - minY + 1) * 0.15
-      );
-      minX = Math.max(0, minX - pad);
-      minY = Math.max(0, minY - pad);
-      maxX = Math.min(width - 1, maxX + pad);
-      maxY = Math.min(height - 1, maxY + pad);
-
-      const cropW = maxX - minX + 1;
-      const cropH = maxY - minY + 1;
-      const side = Math.max(cropW, cropH);
-
-      const square = document.createElement("canvas");
-      square.width = 28;
-      square.height = 28;
-      const sctx = square.getContext("2d", {
-        willReadFrequently: true
-      });
-
-      sctx.fillStyle = "white";
-      sctx.fillRect(0, 0, 28, 28);
-
-      // Scale the digit to fit inside a 20 × 20 area.
-      const factor = 20 / side;
-      const drawW = cropW * factor;
-      const drawH = cropH * factor;
-      const dx = (28 - drawW) / 2;
-      const dy = (28 - drawH) / 2;
-
-      sctx.drawImage(
-        work, minX, minY, cropW, cropH,
-        dx, dy, drawW, drawH
-      );
-
-      const inputPixels = sctx.getImageData(0, 0, 28, 28);
-      const values = new Float32Array(28 * 28);
-
-      // MNIST usually represents white ink on a black background.
-      for (let i = 0; i < values.length; i++) {
-        const p = i * 4;
-        const gray = (
-          inputPixels.data[p] * 0.299 +
-          inputPixels.data[p + 1] * 0.587 +
-          inputPixels.data[p + 2] * 0.114
-        );
-        values[i] = (255 - gray) / 255;
-      }
-
-      // Display the processed image for troubleshooting.
-      const display = ctx.createImageData(280, 280);
-      for (let y = 0; y < 280; y++) {
-        for (let x = 0; x < 280; x++) {
-          const src = Math.floor(y / 10) * 28 + Math.floor(x / 10);
-          const p = (y * 280 + x) * 4;
-          const gray = Math.round((1 - values[src]) * 255);
-          display.data[p] = gray;
-          display.data[p + 1] = gray;
-          display.data[p + 2] = gray;
-          display.data[p + 3] = 255;
-        }
-      }
-      ctx.putImageData(display, 0, 0);
-
-      return tf.tensor4d(values, [1, 28, 28, 1]);
-    }
-
-    scan.addEventListener("click", async () => {
-      if (!model || !imageReady) return;
-
-      scan.disabled = true;
-      status.textContent = "Recognising...";
-      result.textContent = "";
-      confidence.textContent = "";
-
-      let input = null;
-      let output = null;
+      let inputTensor;
+      let outputTensor;
 
       try {
-        input = prepareImage(preview);
-        output = model.predict(input);
+        readButton.disabled = true;
+        status.textContent = "Recognising…";
 
-        const scores = Array.from(await output.data());
-        if (scores.length !== 10) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 28;
+        canvas.height = 28;
+
+        const ctx = canvas.getContext("2d", {
+          willReadFrequently: true
+        });
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, 28, 28);
+
+        // Fit the image into a square while preserving its proportions.
+        const scale = Math.min(
+          20 / preview.naturalWidth,
+          20 / preview.naturalHeight
+        );
+
+        const width = preview.naturalWidth * scale;
+        const height = preview.naturalHeight * scale;
+
+        ctx.drawImage(
+          preview,
+          (28 - width) / 2,
+          (28 - height) / 2,
+          width,
+          height
+        );
+
+        const pixels = ctx.getImageData(0, 0, 28, 28).data;
+        const values = new Float32Array(28 * 28);
+
+        for (let i = 0; i < 28 * 28; i++) {
+          const offset = i * 4;
+          const gray =
+            0.299 * pixels[offset] +
+            0.587 * pixels[offset + 1] +
+            0.114 * pixels[offset + 2];
+
+          // MNIST commonly uses white strokes on a black background.
+          values[i] = (255 - gray) / 255;
+        }
+
+        inputTensor = tf.tensor4d(values, [1, 28, 28, 1]);
+
+        outputTensor = model.predict(inputTensor);
+
+        const scores = await outputTensor.data();
+
+        if (scores.length < 10) {
           throw new Error(
-            "Expected 10 digit scores but received " + scores.length +
-            ". The model output format may differ."
+            "Expected 10 digit scores, but received " + scores.length
           );
         }
 
-        let best = 0;
-        for (let i = 1; i < scores.length; i++) {
-          if (scores[i] > scores[best]) best = i;
+        let bestDigit = 0;
+        for (let i = 1; i < 10; i++) {
+          if (scores[i] > scores[bestDigit]) bestDigit = i;
         }
 
-        // Valid for typical softmax-output MNIST models.
-        result.textContent = "Predicted digit: " + best;
-        confidence.textContent =
-          "Model score: " +
-          (scores[best] * 100).toFixed(1) + "%";
-
-        status.textContent =
-          "Finished. Check the processed image and prediction.";
+        result.textContent = "Digit: " + bestDigit;
+        status.textContent = "Recognition complete.";
       } catch (error) {
-        status.textContent = "Recognition failed: " + error.message;
+        console.error("Prediction failed:", error);
+        status.textContent =
+          "Recognition failed: " + (error.message || String(error));
       } finally {
-        if (input) input.dispose();
-        if (output && output.dispose) output.dispose();
-        scan.disabled = !model || !imageReady;
+        if (inputTensor) inputTensor.dispose();
+        if (outputTensor && typeof outputTensor.dispose === "function") {
+          outputTensor.dispose();
+        }
+        readButton.disabled = !model;
       }
     });
 
