@@ -1,0 +1,294 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>iPhone Handwriting Scanner</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 520px;
+      margin: 30px auto;
+      padding: 18px;
+      background: #f4f6f8;
+      color: #172033;
+    }
+    .panel {
+      background: white;
+      padding: 22px;
+      border-radius: 18px;
+      box-shadow: 0 3px 14px #0001;
+    }
+    button, input {
+      width: 100%;
+      box-sizing: border-box;
+      margin: 10px 0;
+      padding: 13px;
+      font-size: 16px;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      background: #155eef;
+      color: white;
+      font-weight: bold;
+    }
+    canvas, #preview {
+      display: block;
+      max-width: 100%;
+      margin: 12px auto;
+      border: 1px solid #ddd;
+    }
+    #preview { max-height: 280px; }
+    #result { font-size: 22px; font-weight: bold; }
+    #status { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1>Digit Scanner</h1>
+    <p>Photograph one large handwritten digit on plain white paper.</p>
+
+    <input id="photo" type="file" accept="image/*" capture="environment">
+
+    <img id="preview" hidden alt="Photo preview">
+
+    <button id="scan" disabled>Recognise digit</button>
+
+    <p id="status">Loading machine-learning model...</p>
+    <p id="result"></p>
+    <p id="confidence"></p>
+
+    <h3>Processed image (28 × 28)</h3>
+    <canvas id="small" width="280" height="280"></canvas>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js"></script>
+
+  <script>
+    const MODEL_URL =
+      "https://raw.githubusercontent.com/mananmaharaja98-del/digit-read-ml/main/mnist_model.tflite";
+
+    const photo = document.getElementById("photo");
+    const preview = document.getElementById("preview");
+    const scan = document.getElementById("scan");
+    const status = document.getElementById("status");
+    const result = document.getElementById("result");
+    const confidence = document.getElementById("confidence");
+    const canvas = document.getElementById("small");
+    const ctx = canvas.getContext("2d");
+
+    let model = null;
+    let imageReady = false;
+
+    async function initialise() {
+      try {
+        if (!window.tflite || !window.tf) {
+          throw new Error("The machine-learning libraries did not load.");
+        }
+
+        tflite.setWasmPath(
+          "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/"
+        );
+
+        await tf.ready();
+        model = await tflite.loadTFLiteModel(MODEL_URL);
+
+        status.textContent = "Model loaded. Take a photo of one digit.";
+      } catch (error) {
+        status.textContent = "Model loading failed: " + error.message;
+      }
+    }
+
+    photo.addEventListener("change", () => {
+      const file = photo.files[0];
+      if (!file) return;
+
+      imageReady = false;
+      result.textContent = "";
+      confidence.textContent = "";
+
+      const url = URL.createObjectURL(file);
+      preview.onload = () => {
+        imageReady = true;
+        preview.hidden = false;
+        scan.disabled = !model;
+        status.textContent = model
+          ? "Photo ready. Tap Recognise digit."
+          : "Photo ready. Waiting for model...";
+        URL.revokeObjectURL(url);
+      };
+      preview.onerror = () => {
+        status.textContent = "Could not open that image.";
+        URL.revokeObjectURL(url);
+      };
+      preview.src = url;
+    });
+
+    function prepareImage(img) {
+      // Find the approximate bounds of the dark handwritten digit.
+      const work = document.createElement("canvas");
+      const maxSide = 600;
+      const scale = Math.min(
+        1, maxSide / Math.max(img.naturalWidth, img.naturalHeight)
+      );
+
+      work.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      work.height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+      const wctx = work.getContext("2d", {
+        willReadFrequently: true
+      });
+
+      wctx.fillStyle = "white";
+      wctx.fillRect(0, 0, work.width, work.height);
+      wctx.drawImage(img, 0, 0, work.width, work.height);
+
+      const pixels = wctx.getImageData(
+        0, 0, work.width, work.height
+      );
+      const { data, width, height } = pixels;
+
+      let minX = width, minY = height, maxX = -1, maxY = -1;
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 4;
+          const gray = (
+            data[i] * 0.299 +
+            data[i + 1] * 0.587 +
+            data[i + 2] * 0.114
+          );
+
+          // Ignore very light background pixels.
+          if (gray < 160) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+          }
+        }
+      }
+
+      if (maxX < 0) {
+        throw new Error("No dark digit found. Use dark ink on white paper.");
+      }
+
+      // Crop around the digit, preserving a little surrounding space.
+      const pad = Math.round(
+        Math.max(maxX - minX + 1, maxY - minY + 1) * 0.15
+      );
+      minX = Math.max(0, minX - pad);
+      minY = Math.max(0, minY - pad);
+      maxX = Math.min(width - 1, maxX + pad);
+      maxY = Math.min(height - 1, maxY + pad);
+
+      const cropW = maxX - minX + 1;
+      const cropH = maxY - minY + 1;
+      const side = Math.max(cropW, cropH);
+
+      const square = document.createElement("canvas");
+      square.width = 28;
+      square.height = 28;
+      const sctx = square.getContext("2d", {
+        willReadFrequently: true
+      });
+
+      sctx.fillStyle = "white";
+      sctx.fillRect(0, 0, 28, 28);
+
+      // Scale the digit to fit inside a 20 × 20 area.
+      const factor = 20 / side;
+      const drawW = cropW * factor;
+      const drawH = cropH * factor;
+      const dx = (28 - drawW) / 2;
+      const dy = (28 - drawH) / 2;
+
+      sctx.drawImage(
+        work, minX, minY, cropW, cropH,
+        dx, dy, drawW, drawH
+      );
+
+      const inputPixels = sctx.getImageData(0, 0, 28, 28);
+      const values = new Float32Array(28 * 28);
+
+      // MNIST usually represents white ink on a black background.
+      for (let i = 0; i < values.length; i++) {
+        const p = i * 4;
+        const gray = (
+          inputPixels.data[p] * 0.299 +
+          inputPixels.data[p + 1] * 0.587 +
+          inputPixels.data[p + 2] * 0.114
+        );
+        values[i] = (255 - gray) / 255;
+      }
+
+      // Display the processed image for troubleshooting.
+      const display = ctx.createImageData(280, 280);
+      for (let y = 0; y < 280; y++) {
+        for (let x = 0; x < 280; x++) {
+          const src = Math.floor(y / 10) * 28 + Math.floor(x / 10);
+          const p = (y * 280 + x) * 4;
+          const gray = Math.round((1 - values[src]) * 255);
+          display.data[p] = gray;
+          display.data[p + 1] = gray;
+          display.data[p + 2] = gray;
+          display.data[p + 3] = 255;
+        }
+      }
+      ctx.putImageData(display, 0, 0);
+
+      return tf.tensor4d(values, [1, 28, 28, 1]);
+    }
+
+    scan.addEventListener("click", async () => {
+      if (!model || !imageReady) return;
+
+      scan.disabled = true;
+      status.textContent = "Recognising...";
+      result.textContent = "";
+      confidence.textContent = "";
+
+      let input = null;
+      let output = null;
+
+      try {
+        input = prepareImage(preview);
+        output = model.predict(input);
+
+        const scores = Array.from(await output.data());
+        if (scores.length !== 10) {
+          throw new Error(
+            "Expected 10 digit scores but received " + scores.length +
+            ". The model output format may differ."
+          );
+        }
+
+        let best = 0;
+        for (let i = 1; i < scores.length; i++) {
+          if (scores[i] > scores[best]) best = i;
+        }
+
+        // Valid for typical softmax-output MNIST models.
+        result.textContent = "Predicted digit: " + best;
+        confidence.textContent =
+          "Model score: " +
+          (scores[best] * 100).toFixed(1) + "%";
+
+        status.textContent =
+          "Finished. Check the processed image and prediction.";
+      } catch (error) {
+        status.textContent = "Recognition failed: " + error.message;
+      } finally {
+        if (input) input.dispose();
+        if (output && output.dispose) output.dispose();
+        scan.disabled = !model || !imageReady;
+      }
+    });
+
+    initialise();
+  </script>
+</body>
+</html>
